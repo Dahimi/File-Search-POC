@@ -597,7 +597,8 @@ if st.session_state.current_store:
                 ''', unsafe_allow_html=True)
             
             for msg in messages:
-                with st.chat_message(msg["role"]):
+                avatar = "👤" if msg["role"] == "user" else "🔷"
+                with st.chat_message(msg["role"], avatar=avatar):
                     st.markdown(msg["content"])
                     if msg.get("citations"):
                         citation_html = "".join([
@@ -610,7 +611,7 @@ if st.session_state.current_store:
             messages.append({"role": "user", "content": prompt})
             
             with chat_container:
-                with st.chat_message("user"):
+                with st.chat_message("user", avatar="👤"):
                     st.markdown(prompt)
             
             with st.spinner("Analyzing documents..."):
