@@ -118,18 +118,45 @@ def chat(store_name: str, message: str, history: list):
         )
         
         citations = []
+        grounding_details = []
+        
         if response.candidates and response.candidates[0].grounding_metadata:
             grounding = response.candidates[0].grounding_metadata
+            
+            # Extract chunks (retrieved passages)
             if grounding.grounding_chunks:
-                citations = list({
-                    c.retrieved_context.title 
-                    for c in grounding.grounding_chunks 
-                    if c.retrieved_context and c.retrieved_context.title
-                })
+                for i, chunk in enumerate(grounding.grounding_chunks):
+                    if chunk.retrieved_context:
+                        ctx = chunk.retrieved_context
+                        detail = {
+                            "index": i,
+                            "title": ctx.title if ctx.title else "Unknown",
+                            "text": ctx.text[:500] + "..." if ctx.text and len(ctx.text) > 500 else ctx.text,
+                        }
+                        grounding_details.append(detail)
+                        if ctx.title:
+                            citations.append(ctx.title)
+                
+                citations = list(dict.fromkeys(citations))  # Dedupe preserving order
+            
+            # Extract supports (which chunks support which parts of the answer)
+            supports = []
+            if hasattr(grounding, 'grounding_supports') and grounding.grounding_supports:
+                for support in grounding.grounding_supports:
+                    if support.segment and support.segment.text:
+                        supports.append({
+                            "text": support.segment.text,
+                            "chunk_indices": list(support.grounding_chunk_indices) if support.grounding_chunk_indices else []
+                        })
+            
+            if supports:
+                grounding_details = {"chunks": grounding_details, "supports": supports}
+            else:
+                grounding_details = {"chunks": grounding_details, "supports": []}
         
-        return response.text, citations
+        return response.text, citations, grounding_details
     except Exception as e:
-        return f"Error: {e}", []
+        return f"Error: {e}", [], {}
 
 # --- Page Config ---
 st.set_page_config(
@@ -440,6 +467,41 @@ st.markdown("""
         color: var(--text-muted);
     }
     
+    /* Grounding toggle checkbox */
+    .stChatMessage .stCheckbox {
+        margin-top: 0.5rem !important;
+    }
+    
+    .stChatMessage .stCheckbox label {
+        font-size: 0.75rem !important;
+        color: var(--text-muted) !important;
+        font-family: 'IBM Plex Mono', monospace !important;
+    }
+    
+    .stChatMessage .stCheckbox label:hover {
+        color: var(--accent) !important;
+    }
+    
+    .stChatMessage .stCheckbox [data-testid="stCheckbox"] {
+        background: transparent !important;
+    }
+    
+    /* Grounding info box */
+    .grounding-info {
+        background: rgba(59, 130, 246, 0.1);
+        border: 1px solid rgba(59, 130, 246, 0.2);
+        border-radius: 6px;
+        padding: 0.75rem;
+        margin-bottom: 0.75rem;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        line-height: 1.5;
+    }
+    
+    .grounding-info strong {
+        color: var(--accent);
+    }
+    
     /* Scrollbar */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: var(--bg-primary); }
@@ -606,6 +668,55 @@ if st.session_state.current_store:
                             for c in msg["citations"]
                         ])
                         st.markdown(f"<div style='margin-top: 0.5rem;'>{citation_html}</div>", unsafe_allow_html=True)
+                    
+                    # Grounding details (collapsible via checkbox)
+                    if msg.get("grounding") and msg["grounding"].get("chunks"):
+                        grounding = msg["grounding"]
+                        msg_idx = messages.index(msg)
+                        toggle_key = f"grounding_{st.session_state.current_store}_{msg_idx}"
+                        
+                        show_grounding = st.checkbox(
+                            "🔍 View source passages",
+                            key=toggle_key,
+                            value=False
+                        )
+                        
+                        if show_grounding:
+                            # Info box explaining the section
+                            st.markdown("""
+                            <div class="grounding-info">
+                                <strong>About this section:</strong> This shows how the answer was grounded in your documents. 
+                                <strong>Grounded statements</strong> show which parts of the response came from specific passages (marked [1], [2], etc). 
+                                <strong>Retrieved passages</strong> are the actual text excerpts from your documents that were used to generate the answer.
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Show which parts of the answer came from which chunks
+                            if grounding.get("supports"):
+                                st.markdown("**Grounded statements:**")
+                                for support in grounding["supports"]:
+                                    chunk_refs = ", ".join([f"[{i+1}]" for i in support["chunk_indices"]])
+                                    st.markdown(f"""
+                                    <div style="background: var(--bg-tertiary); padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 0.5rem; border-left: 2px solid var(--accent);">
+                                        <span style="font-size: 0.75rem; color: var(--text-muted);">{chunk_refs}</span><br>
+                                        <span style="font-size: 0.85rem;">"{support['text']}"</span>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                st.markdown("---")
+                            
+                            # Show retrieved chunks
+                            st.markdown("**Retrieved passages:**")
+                            for chunk in grounding["chunks"]:
+                                st.markdown(f"""
+                                <div style="background: var(--bg-tertiary); padding: 0.75rem; border-radius: 6px; margin-bottom: 0.75rem;">
+                                    <div style="font-size: 0.7rem; color: var(--accent); margin-bottom: 0.25rem;">
+                                        [{chunk['index']+1}] {chunk['title']}
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap;">
+{chunk['text'] if chunk['text'] else 'No text available'}
+                                    </div>
+                                </div>
+                                """, unsafe_allow_html=True)
         
         if prompt := st.chat_input("Ask about the deal materials..."):
             messages.append({"role": "user", "content": prompt})
@@ -615,7 +726,7 @@ if st.session_state.current_store:
                     st.markdown(prompt)
             
             with st.spinner("Analyzing documents..."):
-                response_text, citations = chat(
+                response_text, citations, grounding_details = chat(
                     st.session_state.current_store,
                     prompt,
                     messages[:-1]
@@ -624,7 +735,8 @@ if st.session_state.current_store:
             messages.append({
                 "role": "model",
                 "content": response_text,
-                "citations": citations
+                "citations": citations,
+                "grounding": grounding_details
             })
             
             st.rerun()
