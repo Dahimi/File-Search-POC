@@ -1,13 +1,13 @@
-# File Search POC 🔍
+# Deal Room Assistant ◆
 
-A minimal RAG chatbot using Google's Gemini File Search API.
+A document intelligence tool for Private Equity due diligence, powered by Google's Gemini File Search API.
 
 ## Features
 
-- **Spaces**: Create isolated knowledge bases (File Search Stores)
-- **File Upload**: Upload documents (PDF, TXT, MD, JSON, CSV, DOCX, HTML)
-- **Chat**: Ask questions and get answers grounded in your documents
-- **Citations**: See which files were used to generate responses
+- **Deal Rooms**: Isolated workspaces for each potential acquisition or deal
+- **Document Upload**: Upload CIMs, financials, legal docs, memos (PDF, DOCX, XLSX, etc.)
+- **Intelligent Q&A**: Ask questions and get answers grounded in your deal materials
+- **Source Citations**: See which documents were referenced in each response
 
 ## Setup
 
@@ -36,7 +36,7 @@ streamlit run app.py
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `GEMINI_API_KEY` | (required) | Your Google AI API key |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Model to use for chat |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model to use for analysis |
 
 ## Deploy to Streamlit Cloud
 
@@ -47,24 +47,30 @@ streamlit run app.py
    ```toml
    GEMINI_API_KEY = "your-api-key-here"
    ```
-5. Deploy!
+5. Deploy and share with your team
 
 ## How It Works
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Upload    │────▶│  File Search     │────▶│  Chunked &      │
-│   Files     │     │  Store (Space)   │     │  Embedded       │
-└─────────────┘     └──────────────────┘     └─────────────────┘
-                            │
-                            ▼
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Chat      │────▶│  Semantic Search │────▶│  Grounded       │
-│   Query     │     │  + Gemini        │     │  Response       │
-└─────────────┘     └──────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Upload Deal    │────▶│   Deal Room     │────▶│   Chunked &     │
+│  Materials      │     │   (File Store)  │     │   Embedded      │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                               │
+                               ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Due Diligence  │────▶│ Semantic Search │────▶│   Grounded      │
+│  Questions      │     │   + Gemini      │     │   Analysis      │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
-Each **Space** = A Google File Search Store (persistent)  
-Each **File** = Automatically chunked, embedded, and indexed  
-Each **Chat** = Queries the space semantically, returns citations
+**Deal Room** = A Google File Search Store (persistent document collection)  
+**Documents** = Automatically chunked, embedded, and indexed for semantic search  
+**Q&A** = Questions are matched semantically to relevant document sections
 
+## Use Cases
+
+- **Underwriting**: Quickly extract key metrics and assumptions from CIMs
+- **Due Diligence**: Surface risks and red flags across large document sets
+- **Deal Comparison**: Maintain separate rooms for each target company
+- **Team Collaboration**: Share deal rooms with analysts for parallel review

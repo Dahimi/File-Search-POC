@@ -1,12 +1,11 @@
 """
-Deal Room Assistant - Document intelligence for Private Equity due diligence
+Deal Room Assistant - Streamlit UI for document intelligence
 """
 import streamlit as st
-from google import genai
-from google.genai import types
-import time
 import os
-import uuid
+
+# Import AI module
+from deal_room_ai import DealRoomAI
 
 # --- Configuration ---
 def get_config(key: str, default: str = None):
@@ -20,21 +19,24 @@ def get_config(key: str, default: str = None):
 
 MODEL = get_config("GEMINI_MODEL", "gemini-2.5-flash")
 API_KEY = get_config("GEMINI_API_KEY")
+THINKING_BUDGET = int(get_config("THINKING_BUDGET", "2048"))
 
-# --- Initialize Google GenAI Client ---
+# --- Initialize AI Client (cached) ---
 @st.cache_resource
-def get_client():
-    if API_KEY:
-        return genai.Client(api_key=API_KEY)
-    return genai.Client()
+def get_ai_client():
+    return DealRoomAI(
+        api_key=API_KEY, 
+        model=MODEL,
+        thinking_budget=THINKING_BUDGET
+    )
 
-client = get_client()
+ai = get_ai_client()
 
-# --- Helper Functions ---
+# --- UI Wrapper Functions (handle errors for Streamlit) ---
 def list_stores():
     """List all deal rooms."""
     try:
-        return list(client.file_search_stores.list())
+        return ai.list_stores()
     except Exception as e:
         st.error(f"Error listing deal rooms: {e}")
         return []
@@ -42,8 +44,7 @@ def list_stores():
 def create_store(name: str):
     """Create a new deal room."""
     try:
-        store = client.file_search_stores.create(config={"display_name": name})
-        return store
+        return ai.create_store(name)
     except Exception as e:
         st.error(f"Error creating deal room: {e}")
         return None
@@ -51,112 +52,34 @@ def create_store(name: str):
 def delete_store(store_name: str):
     """Delete a deal room."""
     try:
-        client.file_search_stores.delete(name=store_name, config={"force": True})
-        return True
+        return ai.delete_store(store_name)
     except Exception as e:
         st.error(f"Error deleting deal room: {e}")
         return False
 
 def get_store_info(store_name: str):
-    """Get deal room info including document counts."""
+    """Get deal room info."""
     try:
-        return client.file_search_stores.get(name=store_name)
+        return ai.get_store_info(store_name)
     except Exception as e:
         st.error(f"Error getting deal room info: {e}")
         return None
 
 def upload_file(store_name: str, file):
     """Upload a document to a deal room."""
-    file_ext = os.path.splitext(file.name)[1] if '.' in file.name else ''
-    temp_path = f"/tmp/{uuid.uuid4().hex}{file_ext}"
-    
-    with open(temp_path, "wb") as f:
-        f.write(file.getbuffer())
-    
     try:
-        operation = client.file_search_stores.upload_to_file_search_store(
-            file_search_store_name=store_name,
-            file=temp_path,
-            config={"display_name": file.name}
-        )
-        
-        while not client.operations.get(operation).done:
-            time.sleep(1)
-        
-        os.remove(temp_path)
-        return True
+        return ai.upload_file_bytes(store_name, file.getbuffer(), file.name)
     except Exception as e:
         st.error(f"Error uploading document: {e}")
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
         return False
 
 def chat(store_name: str, message: str, history: list):
     """Query documents in the deal room."""
-    contents = []
-    for msg in history:
-        contents.append(types.Content(
-            role=msg["role"],
-            parts=[types.Part(text=msg["content"])]
-        ))
-    contents.append(types.Content(
-        role="user",
-        parts=[types.Part(text=message)]
-    ))
-    
     try:
-        response = client.models.generate_content(
-            model=MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(
-                    file_search=types.FileSearch(
-                        file_search_store_names=[store_name]
-                    )
-                )]
-            )
-        )
-        
-        citations = []
-        grounding_details = []
-        
-        if response.candidates and response.candidates[0].grounding_metadata:
-            grounding = response.candidates[0].grounding_metadata
-            
-            # Extract chunks (retrieved passages)
-            if grounding.grounding_chunks:
-                for i, chunk in enumerate(grounding.grounding_chunks):
-                    if chunk.retrieved_context:
-                        ctx = chunk.retrieved_context
-                        detail = {
-                            "index": i,
-                            "title": ctx.title if ctx.title else "Unknown",
-                            "text": ctx.text[:500] + "..." if ctx.text and len(ctx.text) > 500 else ctx.text,
-                        }
-                        grounding_details.append(detail)
-                        if ctx.title:
-                            citations.append(ctx.title)
-                
-                citations = list(dict.fromkeys(citations))  # Dedupe preserving order
-            
-            # Extract supports (which chunks support which parts of the answer)
-            supports = []
-            if hasattr(grounding, 'grounding_supports') and grounding.grounding_supports:
-                for support in grounding.grounding_supports:
-                    if support.segment and support.segment.text:
-                        supports.append({
-                            "text": support.segment.text,
-                            "chunk_indices": list(support.grounding_chunk_indices) if support.grounding_chunk_indices else []
-                        })
-            
-            if supports:
-                grounding_details = {"chunks": grounding_details, "supports": supports}
-            else:
-                grounding_details = {"chunks": grounding_details, "supports": []}
-        
-        return response.text, citations, grounding_details
+        response = ai.chat(store_name, message, history)
+        return response.text, response.citations, response.grounding, response.thinking
     except Exception as e:
-        return f"Error: {e}", [], {}
+        return f"Error: {e}", [], {}, None
 
 # --- Page Config ---
 st.set_page_config(
@@ -603,9 +526,9 @@ if st.session_state.current_store:
         store_info = get_store_info(st.session_state.current_store)
         
         if store_info:
-            active = int(store_info.active_documents_count or 0)
-            pending = int(store_info.pending_documents_count or 0)
-            failed = int(store_info.failed_documents_count or 0)
+            active = store_info.active_documents_count
+            pending = store_info.pending_documents_count
+            failed = store_info.failed_documents_count
             
             if active > 0 or pending > 0:
                 if active > 0:
@@ -669,6 +592,32 @@ if st.session_state.current_store:
                         ])
                         st.markdown(f"<div style='margin-top: 0.5rem;'>{citation_html}</div>", unsafe_allow_html=True)
                     
+                    # Model's thinking/reasoning (collapsible)
+                    if msg.get("thinking"):
+                        msg_idx = messages.index(msg)
+                        thinking_key = f"thinking_{st.session_state.current_store}_{msg_idx}"
+                        
+                        show_thinking = st.checkbox(
+                            "🧠 View reasoning process",
+                            key=thinking_key,
+                            value=False
+                        )
+                        
+                        if show_thinking:
+                            st.markdown("""
+                            <div class="grounding-info">
+                                <strong>Model's reasoning:</strong> This shows how the AI analyzed the retrieved documents 
+                                and reasoned through the question before generating its response.
+                            </div>
+                            """, unsafe_allow_html=True)
+                            st.markdown(f"""
+                            <div style="background: var(--bg-tertiary); padding: 0.75rem; border-radius: 6px; 
+                                        font-size: 0.8rem; color: var(--text-secondary); line-height: 1.6;
+                                        white-space: pre-wrap; font-family: 'IBM Plex Mono', monospace;">
+{msg["thinking"]}
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
                     # Grounding details (collapsible via checkbox)
                     if msg.get("grounding") and msg["grounding"].get("chunks"):
                         grounding = msg["grounding"]
@@ -726,7 +675,7 @@ if st.session_state.current_store:
                     st.markdown(prompt)
             
             with st.spinner("Analyzing documents..."):
-                response_text, citations, grounding_details = chat(
+                response_text, citations, grounding_details, thinking = chat(
                     st.session_state.current_store,
                     prompt,
                     messages[:-1]
@@ -736,7 +685,8 @@ if st.session_state.current_store:
                 "role": "model",
                 "content": response_text,
                 "citations": citations,
-                "grounding": grounding_details
+                "grounding": grounding_details,
+                "thinking": thinking
             })
             
             st.rerun()
